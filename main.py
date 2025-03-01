@@ -22,7 +22,8 @@ from src.utils import (
     validate_partner_url,
     handle_name_suggestion,
     infer_eligibility,
-    recognize_name_intent
+    recognize_name_intent,
+    handle_name_selection
 )
 from src.constants import DEFAULT_DRILL_INFO, CATEGORY_SUBCATEGORY_MAP
 import json
@@ -105,23 +106,34 @@ async def chat_endpoint(chat_input: SessionInput):
             )
 
         if current_question == "drillName":
-    # First check if the user has selected a name from suggestions
-            if "suggested_names" in session_data and session_data.get("name_conversation", {}).get("stage") == "awaiting_choice":
-                choice, selected_name = analyze_name_choice(message, session_data["suggested_names"], llm)
+            if "suggested_names" in session_store.get(session_id, {}) and session_store[session_id].get("name_conversation", {}).get("stage") == "awaiting_choice":
+                # Use the enhanced analyze_name_choice function to determine selection
+                choice_index, selected_name = analyze_name_choice(message, session_store[session_id]["suggested_names"], llm)
                 
-                if choice is not None:
+                if selected_name:
+                    # User has made a clear selection
                     context["hackathon_details"]["drillName"] = selected_name
                     session_data.update({
                         "context": context,
                         "current_question": "phaseStartDt"  # Move to date question
                     })
+                    session_store[session_id] = session_data  # Update session store
+                    
                     return SessionResponse(
                         session_id=session_id,
                         message=f"Great! Your event name is set to '{selected_name}'. When do you want to organize it?",
                         context=context,
                         current_question="phaseStartDt"
                     )
+                elif "new" in message.lower() or "different" in message.lower() or "other" in message.lower():
+                    # User wants new suggestions - reset the suggestion state
+                    if "name_conversation" in session_store[session_id]:
+                        session_store[session_id]["name_conversation"]["stage"] = "suggesting"
+                else:
+                    # Selection was unclear, continue with name suggestion flow
+                    pass
             
+            # Check for direct name in message
             has_name, extracted_name = recognize_name_intent(message, llm)
 
             if has_name:
@@ -130,6 +142,8 @@ async def chat_endpoint(chat_input: SessionInput):
                     "context": context,
                     "current_question": "phaseStartDt"  # Move to date question
                 })
+                session_store[session_id] = session_data  # Update session store
+                
                 return SessionResponse(
                     session_id=session_id,
                     message=f"Great! Your event name is set to '{extracted_name}'. When do you want to organize it?",
@@ -137,10 +151,13 @@ async def chat_endpoint(chat_input: SessionInput):
                     current_question="phaseStartDt"
                 )
 
+            # If we reach here, process through the name suggestion workflow
             name_response = await handle_name_suggestion(session_id, message, context)
             
+            # Update session data with the response
             session_data["context"] = name_response["context"]
             session_data["current_question"] = name_response["current_question"]
+            session_store[session_id] = session_data  # Update session store
             
             return SessionResponse(
                 session_id=session_id,
