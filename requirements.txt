@@ -1,0 +1,10 @@
+fastapi
+pydantic
+python-dotenv
+requests
+langchain-core
+langchain-google-genai
+pytz
+python-dateutil
+pymysql
+beautifulsoup4
