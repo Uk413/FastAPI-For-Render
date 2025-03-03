@@ -12,6 +12,8 @@ from src.utils import (
     infer_subcategory,
     infer_yes_no,
     generate_drill_description,
+    suggest_event_names,
+    parse_user_choice,
     infer_purpose,
     generate_faq_answers,
     analyze_name_choice,
@@ -21,6 +23,7 @@ from src.utils import (
     handle_name_suggestion,
     infer_eligibility,
     recognize_name_intent,
+    handle_name_selection
 )
 from src.constants import DEFAULT_DRILL_INFO, CATEGORY_SUBCATEGORY_MAP
 import json
