@@ -12,7 +12,6 @@ from src.utils import (
     infer_subcategory,
     infer_yes_no,
     generate_drill_description,
-    parse_user_choice,
     infer_purpose,
     generate_faq_answers,
     analyze_name_choice,
@@ -22,11 +21,13 @@ from src.utils import (
     handle_name_suggestion,
     infer_eligibility,
     recognize_name_intent,
-    handle_name_selection
+    find_partner_by_url
 )
 from src.constants import DEFAULT_DRILL_INFO, CATEGORY_SUBCATEGORY_MAP
 import json
 import uuid
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 load_dotenv()
 app = FastAPI()
@@ -316,36 +317,69 @@ async def chat_endpoint(chat_input: SessionInput):
                         context=context,
                         current_question="partnerUrl"
                     )
-
-                # Extract partner information
-                partner_info = extract_partner_info(partner_url, llm)
                 
-                # Check if this is a new partner or an existing one
-                partner_id = None
-                partner_name = None
+                # 1. First check if this partner exists using the URL
+                existing_partner = find_partner_by_url(partner_url)
                 
-                if "partnerId" in partner_info:
-                    # This is an existing partner returned by get_existing_partner
-                    partner_id = partner_info["partnerId"]
-                    partner_name = partner_info["partnerDisplayName"] or partner_info["partnerName"]
+                if existing_partner and "partnerId" in existing_partner:
+                    # Partner exists - use the existing partner data
+                    partner_id = existing_partner["partnerId"]
+                    
+                    # Multiple fallbacks to ensure we get a proper name
+                    if existing_partner.get("partnerDisplayName") and existing_partner["partnerDisplayName"] not in ["U", "", None]:
+                        partner_name = existing_partner["partnerDisplayName"]
+                    elif existing_partner.get("partnerName") and existing_partner["partnerName"] not in ["U", "", None]:
+                        partner_name = existing_partner["partnerName"]
+                    else:
+                        # Parse a name from the URL as last resort
+                        domain = partner_url.split('/')[2] if len(partner_url.split('/')) > 2 else partner_url
+                        domain = domain.replace("www.", "")
+                        partner_name = domain.split('.')[0].title()
+                    
                     print(f"Using existing partner: {partner_name} (ID: {partner_id})")
                 else:
-                    # Ensure social links are properly formatted
-                    if isinstance(partner_info.get('partnerSocialLinks'), str):
-                        social_links = partner_info['partnerSocialLinks']
-                    else:
-                        social_links = json.dumps({"websiteurl": partner_url})
-                    partner_info['partnerSocialLinks'] = social_links
-                    
-                    # Register new partner
-                    partner_response = register_partner(partner_info)
-                    
-                    if not partner_response or "partnerId" not in partner_response:
-                        raise ValueError("Failed to register partner")
-                    
-                    partner_id = partner_response["partnerId"]
-                    partner_name = partner_response["partnerDisplayName"]
-                    print(f"Registered new partner: {partner_name} (ID: {partner_id})")
+                    # New partner - extract information and register
+                    try:
+                        # Extract partner information
+                        partner_info = extract_partner_info(partner_url, llm)
+                        
+                        # Validate extracted data to prevent bad values
+                        if not partner_info.get("partnerName") or partner_info["partnerName"] in ["U", "", None]:
+                            # Extract domain name from URL as fallback
+                            domain = partner_url.split('/')[2] if len(partner_url.split('/')) > 2 else partner_url
+                            domain = domain.replace("www.", "")
+                            partner_info["partnerName"] = domain.split('.')[0].title()
+                        
+                        if not partner_info.get("partnerDisplayName") or partner_info["partnerDisplayName"] in ["U", "", None]:
+                            partner_info["partnerDisplayName"] = partner_info["partnerName"]
+                        
+                        # Ensure social links are properly formatted
+                        if isinstance(partner_info.get('partnerSocialLinks'), str):
+                            try:
+                                json.loads(partner_info['partnerSocialLinks'])
+                            except json.JSONDecodeError:
+                                partner_info['partnerSocialLinks'] = json.dumps({"websiteurl": partner_url})
+                        else:
+                            partner_info['partnerSocialLinks'] = json.dumps({"websiteurl": partner_url})
+                        
+                        # Register new partner
+                        partner_response = register_partner(partner_info)
+                        
+                        if not partner_response or "partnerId" not in partner_response:
+                            raise ValueError("Failed to register partner")
+                        
+                        partner_id = partner_response["partnerId"]
+                        partner_name = partner_response.get("partnerDisplayName") or partner_response.get("partnerName")
+                        
+                        if not partner_name or partner_name in ["U", "", None]:
+                            # Final fallback
+                            domain = partner_url.split('/')[2] if len(partner_url.split('/')) > 2 else partner_url
+                            partner_name = domain.replace("www.", "").split('.')[0].title()
+                        
+                        print(f"Registered new partner: {partner_name} (ID: {partner_id})")
+                    except Exception as e:
+                        print(f"Partner extraction error: {str(e)}")
+                        raise ValueError(f"Failed to extract partner information: {str(e)}")
                 
                 # Update event details with partner information
                 context["hackathon_details"].update({
