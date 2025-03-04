@@ -12,7 +12,6 @@ from src.utils import (
     infer_subcategory,
     infer_yes_no,
     generate_drill_description,
-    suggest_event_names,
     parse_user_choice,
     infer_purpose,
     generate_faq_answers,
