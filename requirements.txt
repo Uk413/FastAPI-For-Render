@@ -9,3 +9,4 @@ python-dateutil
 pymysql
 beautifulsoup4
 uvicorn
+urllib3
