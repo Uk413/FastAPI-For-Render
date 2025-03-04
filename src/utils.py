@@ -259,195 +259,6 @@ def auto_correct_input(field_name: str, user_input: str, llm=None) -> str:
     response = (prompt_template | llm).invoke({})
     return response.content.strip()
 
-def suggest_event_names(user_input: str, llm=None) -> list:
-    """Generate event name suggestions based on user input."""
-    if llm is None:
-        llm = get_llm()
-    
-    uncertainty_prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""
-        Analyze the following user input: '{user_input}'.
-        Determine if the input indicates uncertainty about naming an event.
-        Uncertainty may include phrases like 'I don't know', 'not sure', 'can't think', or similar expressions.
-        Return 'True' if the input suggests uncertainty, otherwise return 'False'.
-        """),
-        ("human", "Please provide the inferred response.")
-    ])
-
-    uncertainty_response = (uncertainty_prompt | llm).invoke({})
-    is_uncertain = uncertainty_response.content.strip().lower() == "true"
-    
-    if is_uncertain:
-        suggestion_prompt = ChatPromptTemplate.from_messages([
-            ("system", """
-            The user is trying to name their event but is unsure. 
-            Provide 3-5 random creative and relevant random tech related event name suggestions to the user.
-            Just suggest some names and nothing else.
-            """),
-            ("human", "Please provide the event name suggestions.")
-        ])
-    else:
-        suggestion_prompt = ChatPromptTemplate.from_messages([
-            ("system", f"""
-            The user has provided the following event name: '{user_input}'.
-            Generate 3-5 similar or refined variations of this name that are creative and professional.
-            Just provide the names, one per line.
-            """),
-            ("human", "Please provide the event name suggestions.")
-        ])
-    
-    response = (suggestion_prompt | llm).invoke({})
-    suggestions = response.content.strip().split("\n")
-    suggestions = [re.sub(r'[^\w\s]', '', suggestion).strip() for suggestion in suggestions if suggestion.strip()]
-    
-    return suggestions
-
-def analyze_name_choice(message: str, original_name: str, suggestions: list, llm=None) -> str:
-    """
-    Use LLM to analyze user's choice between original name and suggestions.
-    Returns: 'original', '1', '2', '3', '4', or 'unclear'
-    """
-    if llm is None:
-        llm = get_llm()
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", f"""
-        Analyze the user's response to choose between their original name and suggestions.
-        
-        Original name: {original_name}
-        Available suggestions:
-        {', '.join(f'{i+1}. {name}' for i, name in enumerate(suggestions))}
-        
-        User response: {message}
-        
-        Task: Determine which name the user wants to use.
-        
-        Rules:
-        1. If they mention a number (1-4) or say "first", "second", etc -> Return that number
-        2. If they want their original name -> Return "original"
-        3. If they say "use [name]" or "choose [name]" -> Match with suggestions and return corresponding number
-        4. If unclear -> Return "unclear"
-        
-        Return ONLY one of these values:
-        - 'original' if they want to keep their original name
-        - '1', '2', '3', or '4' if they chose that numbered suggestion
-        - 'unclear' if their choice is ambiguous
-        
-        Examples:
-        "keep original" -> "original"
-        "first one" -> "1"
-        "use Tech Summit 2024" -> "1" (if that's suggestion #1)
-        "i like number 2" -> "2"
-        "choose Innovation Expo" -> "2" (if that's suggestion #2)
-        "use my original name" -> "original"
-        "maybe" -> "unclear"
-        """),
-        ("human", "What is the user's choice?")
-    ])
-    
-    try:
-        clean_message = message.strip().lower()
-        
-        if clean_message.isdigit():
-            num = int(clean_message)
-            if 1 <= num <= len(suggestions):
-                return str(num)
-        
-        if clean_message.startswith(("use ", "choose ")):
-            name_mentioned = clean_message.replace("use ", "").replace("choose ", "").strip()
-            for i, suggestion in enumerate(suggestions, 1):
-                if name_mentioned == suggestion.lower():
-                    print(f"Matched suggestion #{i}: {suggestion}")
-                    return str(i)
-        
-        response = (prompt | llm).invoke({})
-        choice = response.content.strip().lower()
-        
-        print(f"LLM analyzed choice: '{choice}' for message: '{message}'")
-        
-        if choice in ['1', '2', '3', '4', 'original', 'unclear']:
-            return choice
-            
-        return 'unclear'
-        
-    except Exception as e:
-        print(f"Error in analyze_name_choice: {str(e)}")
-        return 'unclear'
-
-def parse_user_choice(user_response: str, suggestions: list, llm=None) -> str:
-    if llm is None:
-        llm = get_llm()
-    
-    for suggestion in suggestions:
-        pattern = rf'\b{re.escape(suggestion)}\b'
-        if re.search(pattern, user_response, re.IGNORECASE):
-            return suggestion
-    
-    prompt = f"""
-    The user has been given these event name suggestions:
-    {chr(10).join(f"{i+1}. {name}" for i, name in enumerate(suggestions))}
-    
-    Their response is: '{user_response}'
-    
-    Analyze if they want to:
-    1. Keep their original name (indicating phrases like "keep original", "use my name", "original", "my name", "keep it", "no change", etc.)
-    2. Choose one of the suggestions (they might say things like "use suggestion X", "I like X", "X sounds good", "use the X one", etc.)
-    
-    If they want a suggestion, identify which one they want by number (1-{len(suggestions)}).
-    
-    Return EXACTLY one of these:
-    - "original" if they want to keep their original name
-    - The number (1-{len(suggestions)}) of the suggestion they want
-    """
-    
-    prompt_template = ChatPromptTemplate.from_messages([
-        ("system", prompt),
-        ("human", "Please provide the inferred choice.")
-    ])
-    
-    response = (prompt_template | llm).invoke({})
-    inferred_choice = response.content.strip().lower()
-    
-    if inferred_choice == "original":
-        return "original"
-    
-    try:
-        index = int(inferred_choice)
-        if 1 <= index <= len(suggestions):
-            return suggestions[index - 1]
-    except ValueError:
-        numbers = re.findall(r'\d+', user_response)
-        if numbers:
-            try:
-                index = int(numbers[0])
-                if 1 <= index <= len(suggestions):
-                    return suggestions[index - 1]
-            except ValueError:
-                pass
-    
-    final_prompt = f"""
-    The user response '{user_response}' needs to be matched to one of these suggestions:
-    {chr(10).join(f"{i+1}. {name}" for i, name in enumerate(suggestions))}
-    
-    Return ONLY the number (1-{len(suggestions)}) of the most likely matching suggestion.
-    If unclear, return 1.
-    """
-    
-    prompt_template = ChatPromptTemplate.from_messages([
-        ("system", final_prompt),
-        ("human", "Please provide the suggestion number.")
-    ])
-    
-    final_response = (prompt_template | llm).invoke({})
-    try:
-        index = int(final_response.content.strip())
-        if 1 <= index <= len(suggestions):
-            return suggestions[index - 1]
-    except ValueError:
-        pass
-    
-    return "original"
-
 def generate_drill_description(drill_info: dict, llm=None) -> str:
     """Generate a short description for the event based on the drillPurpose."""
     if llm is None:
@@ -681,125 +492,109 @@ def generate_faq_answers(drill_info: dict, llm=None) -> list:
     return faq_list
 
 def extract_partner_info(url: str, llm=None) -> dict:
-    
+    """
+    Extracts partner information from a given URL with improved error handling.
+    """
     print(f"\n=== Starting partner info extraction for URL: {url} ===")
     
     if llm is None:
         llm = get_llm()
         
     try:
+        # Normalize URL
         if not url.startswith(('http://', 'https://')):
             url = f'https://{url}'
         print(f"Normalized URL: {url}")
-            
-        response = requests.get(url, timeout=10, verify=False)
+        
+        # Configure session
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5'
+        })
+        
+        # Fetch page content
+        response = session.get(url, timeout=15, verify=False)
         response.raise_for_status()
         print(f"URL fetch successful. Status code: {response.status_code}")
         
+        # Parse content
         soup = BeautifulSoup(response.text, 'html.parser')
         
+        # Extract basic info
         title = soup.title.string.strip() if soup.title else ""
-        meta_desc = soup.find('meta', {'name': 'description'}) or soup.find('meta', {'property': 'og:description'})
+        domain = url.split('/')[2] if len(url.split('/')) > 2 else url
+        domain = domain.replace("www.", "")
+        
+        # Extract metadata
+        meta_desc = (
+            soup.find('meta', {'name': 'description'}) or 
+            soup.find('meta', {'property': 'og:description'})
+        )
         description = meta_desc.get('content', '').strip() if meta_desc else ""
         
-        logo = soup.find('link', {'rel': 'icon'}) or soup.find('link', {'rel': 'shortcut icon'})
+        # Extract logo
+        logo = (
+            soup.find('link', {'rel': 'icon'}) or 
+            soup.find('link', {'rel': 'shortcut icon'})
+        )
         logo_url = logo.get('href', '') if logo else ''
         if logo_url and not logo_url.startswith(('http://', 'https://')):
             logo_url = f"{url.rstrip('/')}/{logo_url.lstrip('/')}"
         
-        about_section = soup.find(lambda tag: tag.name in ['div', 'section'] and 
-                                any(keyword in tag.get('class', []) or keyword in tag.get('id', '') 
-                                    for keyword in ['about', 'company', 'who-we-are', 'profile']))
-        
-        if about_section:
-            text_content = ' '.join([text.strip() for text in about_section.stripped_strings])[:2000]
-        else:
-            paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 30]
-            text_content = ' '.join(paragraphs)[:2000]
-            
-            if len(text_content) < 200:
-                text_content = ' '.join([
-                    text for text in soup.stripped_strings
-                    if len(text.strip()) > 20
-                ])[:2000]
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", """Extract accurate company information from the provided webpage content.
-                Analyze the content carefully to identify:
-                1. The full legal company name
-                2. A shorter display name or common name
-                3. When the company was established (year only)
-                4. Main industry or business sector
-                5. A concise description of what the company does
-
-                Return ONLY the following JSON structure without any additional text:
-                {{
-                    "active": true,
-                    "partnerName": "FULL_LEGAL_NAME",
-                    "customUrl": "SHORT_URL_FRIENDLY_NAME",
-                    "partnerLogoPath": "LOGO_URL_FROM_INPUT",
-                    "partnerDisplayName": "DISPLAY_NAME",
-                    "partnerEstablishmentDate": "YYYY",
-                    "partnerDescription": "BRIEF_DESCRIPTION_OF_BUSINESS",
-                    "partnerIndustry": "PRIMARY_INDUSTRY_CATEGORY",
-                    "partnerSocialLinks": "{{\\"websiteurl\\":\\"WEBSITE_URL\\"}}"
-                }}
-
-                If certain information is not found, make a reasonable guess but DO NOT include phrases like 
-                "not specified" or "not found" in the output. For establishment date, use the current year if unknown.
-                """),
-            ("human", f"URL: {url}\nTitle: {title}\nDescription: {description}\nLogoURL: {logo_url}\nContent: {text_content}")
-        ])
-        
-        response = (prompt | llm).invoke({})
-        json_str = response.content.strip()
-        json_str = re.sub(r'^```json\s*|\s*```$', '', json_str, flags=re.MULTILINE)
-        partner_info = json.loads(json_str)
-        
-        existing_partner = get_existing_partner(partner_info["partnerName"])
-        
-        if existing_partner:
-            print(f"Partner already exists: {partner_info['partnerName']}")
-            return existing_partner
-        
-        if not partner_info.get("customUrl") or partner_info["customUrl"] == "SHORT_URL_FRIENDLY_NAME":
-            partner_info["customUrl"] = partner_info["partnerName"].lower().replace(" ", "-")
-        
-        if logo_url and partner_info.get("partnerLogoPath") == "LOGO_URL_FROM_INPUT":
-            partner_info["partnerLogoPath"] = logo_url
-        else:
-            partner_info["partnerLogoPath"] = "NA"
-        
-        if isinstance(partner_info.get("partnerSocialLinks"), dict):
-            partner_info["partnerSocialLinks"] = json.dumps(partner_info["partnerSocialLinks"])
-        elif partner_info.get("partnerSocialLinks") == "{\"websiteurl\":\"WEBSITE_URL\"}":
-            partner_info["partnerSocialLinks"] = json.dumps({"websiteurl": url})
-        
-        return {
+        # Fallback info if extraction fails
+        default_info = {
             "active": True,
-            "customUrl": partner_info["customUrl"][:50],
-            "partnerDisplayName": partner_info["partnerDisplayName"][:50],
-            "partnerEstablishmentDate": partner_info["partnerEstablishmentDate"][:4],  # Ensure only year
-            "partnerLogoPath": partner_info["partnerLogoPath"],
-            "partnerName": partner_info["partnerName"][:100],
+            "customUrl": domain.replace(".", "-"),
+            "partnerDisplayName": domain.split('.')[0].title(),
+            "partnerEstablishmentDate": str(datetime.now().year),
+            "partnerLogoPath": logo_url or "NA",
+            "partnerName": title or domain.split('.')[0].title(),
             "partnerType": "INDUSTRY",
-            "partnerDescription": partner_info["partnerDescription"][:200],
-            "partnerIndustry": partner_info["partnerIndustry"][:50],
-            "partnerSocialLinks": partner_info["partnerSocialLinks"]
+            "partnerDescription": description or "Technology company",
+            "partnerIndustry": "Technology",
+            "partnerSocialLinks": json.dumps({"websiteurl": url})
         }
         
+        # If page content is available, try to extract more detailed info
+        if response.text:
+            about_section = soup.find(lambda tag: tag.name in ['div', 'section'] and 
+                                    any(keyword in (tag.get('class', []) + [tag.get('id', '')])
+                                        for keyword in ['about', 'company', 'who-we-are', 'profile']))
+            
+            if about_section:
+                text_content = ' '.join([text.strip() for text in about_section.stripped_strings])[:2000]
+            else:
+                paragraphs = [p.get_text().strip() for p in soup.find_all('p') if len(p.get_text().strip()) > 30]
+                text_content = ' '.join(paragraphs)[:2000]
+            
+            if text_content:
+                try:
+                    partner_info = default_info.copy()
+                    partner_info.update({
+                        "partnerDescription": text_content[:200],
+                    })
+                    return partner_info
+                except Exception as e:
+                    print(f"Error updating partner info: {str(e)}")
+                    
+        return default_info
+        
     except Exception as e:
-        print(f"\n!!! Error in extract_partner_info: {str(e)}")
+        print(f"Error in extract_partner_info: {str(e)}")
+        # Return basic info based on URL
         domain = url.split('/')[2] if len(url.split('/')) > 2 else url
+        domain = domain.replace("www.", "")
         return {
-            "active": False,
+            "active": True,
             "customUrl": domain.replace(".", "-"),
             "partnerDisplayName": domain.split('.')[0].title(),
             "partnerEstablishmentDate": str(datetime.now().year),
             "partnerLogoPath": "NA",
-            "partnerName": domain,
+            "partnerName": domain.split('.')[0].title(),
             "partnerType": "INDUSTRY",
-            "partnerDescription": "Organization details could not be extracted",
+            "partnerDescription": "Technology company",
             "partnerIndustry": "Technology",
             "partnerSocialLinks": json.dumps({"websiteurl": url})
         }
@@ -872,13 +667,102 @@ def register_partner(partner_info: dict) -> dict:
         raise
 
 def validate_partner_url(url: str) -> bool:
+    """
+    Validates if a given URL is accessible and returns a valid response.
+    """
     try:
+        # Normalize URL
         if not url.startswith(('http://', 'https://')):
             url = f'https://{url}'
-        response = requests.head(url, allow_redirects=True, verify=False)
-        return response.status_code == 200
-    except:
+        
+        # Configure session with custom headers and settings
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        })
+        
+        # Make request with extended timeout and ignore SSL verification
+        response = session.get(
+            url, 
+            timeout=15,
+            verify=False,
+            allow_redirects=True
+        )
+        
+        # Check if response is successful and contains HTML content
+        return (response.status_code == 200 and 
+                'text/html' in response.headers.get('Content-Type', '').lower())
+    
+    except Exception as e:
+        print(f"URL validation error: {str(e)}")
         return False
+
+def find_partner_by_url(url: str) -> Optional[dict]:
+    """
+    Find a partner by URL in the social links
+    """
+    api_url = os.getenv("PARTNER_URL")
+    
+    try:
+        # Normalize the URL for comparison
+        if not url.startswith(('http://', 'https://')):
+            url = f'https://{url}'
+        
+        # Remove trailing slash if present
+        url = url.rstrip('/')
+        
+        # Get all partners
+        response = requests.get(api_url)
+        response.raise_for_status()
+        partners = response.json()
+        
+        if not partners or not isinstance(partners, list):
+            return None
+        
+        # First try exact URL match
+        for partner in partners:
+            social_links = partner.get("partnerSocialLinks", "{}")
+            if isinstance(social_links, str):
+                try:
+                    links_dict = json.loads(social_links)
+                    website = links_dict.get("websiteurl", "").rstrip('/')
+                    
+                    # Try different variations of the URL
+                    url_variations = [
+                        url,
+                        url.replace("https://", "http://"),
+                        url.replace("http://", "https://"),
+                        url.replace("www.", ""),
+                        url + "/"
+                    ]
+                    
+                    if website and any(website == variation for variation in url_variations):
+                        print(f"Found exact partner match by URL: {website}")
+                        return partner
+                except json.JSONDecodeError:
+                    pass
+        
+        # Try domain match if exact match fails
+        domain = url.split('/')[2] if len(url.split('/')) > 2 else url
+        domain = domain.replace("www.", "")
+        
+        for partner in partners:
+            social_links = partner.get("partnerSocialLinks", "{}")
+            if isinstance(social_links, str):
+                try:
+                    links_dict = json.loads(social_links)
+                    website = links_dict.get("websiteurl", "")
+                    if domain in website or domain.split('.')[0] in website:
+                        print(f"Found partner match by domain: {domain}")
+                        return partner
+                except json.JSONDecodeError:
+                    pass
+        
+        print(f"No partner found for URL: {url}")
+        return None
+    except Exception as e:
+        print(f"Error finding partner by URL: {str(e)}")
+        return None
 
 def infer_eligibility(user_response: str, llm=None) -> list:
     
@@ -999,84 +883,6 @@ def infer_eligibility(user_response: str, llm=None) -> list:
         print(f"Error in infer_eligibility: {str(e)}")
         return ["College Students"]
 
-def handle_name_recognition(user_input: str, llm) -> Tuple[bool, Optional[str]]:
-      
-    # Direct extraction attempt using regex for common patterns
-    name_patterns = [
-        r"(?:name it|call it|titled|named)\s+['\"](.+?)['\"]",  # "name it 'Tech Summit'"
-        r"(?:name|call|title):\s+['\"]?(.+?)['\"]?$",           # "name: Tech Summit"
-        r"(?:name|call|title) is\s+['\"]?(.+?)['\"]?",          # "name is Tech Summit"
-        r"['\"](.+?)['\"] (?:as the name|as the title)",        # "'Tech Summit' as the name"
-    ]
-    
-    for pattern in name_patterns:
-        match = re.search(pattern, user_input, re.IGNORECASE)
-        if match:
-            return True, match.group(1).strip()
-    
-    # Use LLM for more complex cases
-    prompt = [
-        SystemMessage(content="""
-        Your task is to determine if the user has provided a specific name for their event or if they need help with naming.
-        If they've provided a name, extract it.
-        If they need help or are unsure, indicate this.
-        
-        Output format (JSON):
-        {
-            "has_provided_name": true/false,
-            "extracted_name": "The name" or null
-        }
-        """),
-        HumanMessage(content=f"User message: '{user_input}'")
-    ]
-    
-    response = llm(prompt)
-    
-    try:
-        # Try to extract JSON from the response
-        import json
-        import re
-        
-        # Look for JSON pattern in the response
-        json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(0))
-            return result.get("has_provided_name", False), result.get("extracted_name")
-    except:
-        # Fallback to simple heuristic if JSON parsing fails
-        uncertainty_phrases = [
-            "not sure", "don't know", "help me", "suggest", "recommendation", 
-            "can't decide", "undecided", "need ideas", "help with name", "thinking"
-        ]
-        
-        if any(phrase in user_input.lower() for phrase in uncertainty_phrases):
-            return False, None
-            
-        # If we've reached here, attempt one more extraction using the LLM
-        follow_up_prompt = [
-            SystemMessage(content="Extract the event name from the user's message, or respond with 'NO_NAME_PROVIDED' if none is found."),
-            HumanMessage(content=user_input)
-        ]
-        
-        name_extraction = llm(follow_up_prompt).content.strip()
-        if name_extraction != "NO_NAME_PROVIDED":
-            return True, name_extraction
-    
-    # Default fallback
-    return False, None
-
-import json
-from typing import Tuple, Optional
-from langchain_core.messages import SystemMessage, HumanMessage
-from src.utils import get_llm
-
-
-import json
-from typing import Tuple, Optional
-from langchain_core.messages import SystemMessage, HumanMessage
-from src.utils import get_llm
-
-
 
 def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
     
@@ -1103,11 +909,11 @@ def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
     }}
     """
 
-    # ✅ Step 2: Make a more explicit request to the LLM
+    #  Step 2: Make a more explicit request to the LLM
     response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Extract event name if given, otherwise indicate uncertainty.")])
 
     try:
-        # ✅ Step 3: Improved error handling and response parsing
+        #  Step 3: Improved error handling and response parsing
         llm_output = response.content.strip()
         
         # Try to extract JSON from potential markdown code blocks
@@ -1119,179 +925,153 @@ def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
         
         result = json.loads(llm_output)
 
-        # ✅ Step 4: More explicit decision logic
+        #  Step 4: More explicit decision logic
         if result.get("has_name", False) and result.get("extracted_name") != "NO_NAME_PROVIDED":
-            print(f"✅ Name detected: {result['extracted_name']}")
+            print(f" Name detected: {result['extracted_name']}")
             return True, result["extracted_name"]
         
-        # ✅ Step 5: Log decision for debugging
+        # Step 5: Log decision for debugging
         print("❌ No name detected, user is uncertain")
         return False, None  
 
     except (json.JSONDecodeError, KeyError) as e:
-        # ✅ Step 6: Improved error logging
+        # Step 6: Improved error logging
         print(f"Error parsing LLM response: {e}")
         print(f"LLM output was: {llm_output}")
         return False, None
-
-
-
-import re
-
-from src.utils import get_llm
-
-llm = get_llm()
+    
 session_store = {}
 
-import json
+def is_requesting_more_suggestions(user_input: str, llm) -> bool:
+    
+    prompt = f"""
+    Analyze the following user input and determine if the user is asking for more options or alternatives.
+    
+    User Input: "{user_input}"
+    
+    Rules:
+    - Respond with ONLY "True" if the user is asking for more suggestions.
+    - Respond with ONLY "False" otherwise.
+    - Interpret phrases like "more", "new suggestion", "different", "other options", "don't like", "something else" as requests for more suggestions.
+    - Be lenient in interpretation but avoid false positives.
+    """
+    response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Is the user asking for more suggestions?")])
+    return response.content.strip().lower() == "true"
+
 
 async def handle_name_suggestion(session_id: str, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-    """Handles event name suggestion using LLM dynamically."""
-    
     if session_id not in session_store:
         session_store[session_id] = {
-            "name_conversation": {"stage": "initial", "collected_info": {}, "attempts": 0},
-            "suggested_names": []
+            "name_conversation": {
+                "stage": "initial",
+                "is_name_finalized": False,
+                "llm_active": True,
+                "previous_suggestions": [],
+                "attempts": 0
+            }
         }
 
     session_data = session_store[session_id]
-    name_conv = session_data.get("name_conversation", {"stage": "initial", "collected_info": {}, "attempts": 0})
+    name_conv = session_data["name_conversation"]
 
-    has_name, extracted_name = recognize_name_intent(user_input, llm)
-
-    # If a name is directly specified in the input
-    if has_name:
-        context["hackathon_details"]["drillName"] = extracted_name
-        
+    # If a name has already been chosen, move forward
+    if context["hackathon_details"].get("drillName"):
         return {
-            "message": f"Great! Your event name is set to '{extracted_name}'. When do you want to organize it?",
+            "message": f"Your event name is set to '{context['hackathon_details']['drillName']}'. When do you want to organize it?",
             "context": context,
-            "current_question": "phaseStartDt"  # Moving to next step
+            "current_question": "phaseStartDt"
         }
 
-    # Check if we're in the selection phase and analyze the response
-    if name_conv.get("stage") == "awaiting_choice" and "suggested_names" in session_data:
-        # Use the analyze_name_choice function to determine which name the user selected
-        choice, selected_name = analyze_name_choice(user_input, session_data["suggested_names"], llm)
-        
-        if selected_name:
-            # User selected a name
-            context["hackathon_details"]["drillName"] = selected_name
-            return {
-                "message": f"Great! Your event name is set to '{selected_name}'. When do you want to organize it?",
-                "context": context,
-                "current_question": "phaseStartDt"  # Moving to next step
-            }
-        elif "new suggestion" in user_input.lower() or "different" in user_input.lower() or "other" in user_input.lower():
-            # User wants new suggestions
-            name_conv["stage"] = "suggesting"
-            return await handle_name_suggestion(session_id, "Please suggest new names", context)
-        else:
-            # User response is unclear, ask for clarification
-            return {
-                "message": "I'm not sure which name you selected. Please either type the name you prefer or the number (e.g., '1' for the first suggestion).",
-                "suggestions": session_data["suggested_names"],
-                "requires_selection": True,
-                "context": context,
-                "current_question": "drillName"
-            }
+    # Check if the user is selecting a name from previous suggestions
+    if name_conv["previous_suggestions"]:
+        prompt = f"""
+        The user was given these event name suggestions:
+        {', '.join(name_conv["previous_suggestions"])}
 
-    if name_conv["stage"] == "initial":
-        name_conv["stage"] = "questioning"  # Only go into questioning if no name is found
+        Now, the user responded with: "{user_input}"
 
-    if name_conv["stage"] == "questioning":
-        if name_conv["attempts"] >= 2:  # If 2 attempts are done, move to name suggestion
-            name_conv["stage"] = "suggesting"
-        else:
-            question_prompt = f"""
-            The user is unsure about their event's name. Generate a single clarifying question
-            to help them describe the event better.
+        Determine if they are expressing preference for one of the names. Examples:
+        - "I like Next Gen AI" → selects "Next Gen AI"
+        - "Let's go with AI Thrive Workshop" → selects "AI Thrive Workshop"
+        - "I prefer AI Launchpad" → selects "AI Launchpad"
+        - "Give me more suggestions" → NO selection, request new names
+        - "None of these work" → NO selection, request new names
 
-            Given context so far:
-            {name_conv.get("collected_info", {})}
-
-            Rules:
-            - Make the question conversational.
-            - Ask about event purpose, audience, or theme.
-            - Return **only the question**, nothing else.
-            """
-
-            response = llm.invoke([SystemMessage(content=question_prompt), HumanMessage(content="What question should I ask?")])
-            question = response.content.strip()
-
-            name_conv["stage"] = "collecting"
-            return {
-                "message": question,
-                "context": context,
-                "current_question": "drillName"
-            }
-
-    # Collect User Response & Ask More Questions if Needed
-    if name_conv["stage"] == "collecting":
-        if not name_conv.get("collected_info"):
-            name_conv["collected_info"] = {}
-            
-        name_conv["collected_info"][f"q{name_conv.get('attempts', 0) + 1}"] = user_input
-        name_conv["attempts"] = name_conv.get("attempts", 0) + 1
-
-        if name_conv.get("attempts", 0) >= 3:  # If 3 responses collected, move to "suggesting"
-            name_conv["stage"] = "suggesting"
-        else:
-            name_conv["stage"] = "questioning"
-            return await handle_name_suggestion(session_id, user_input, context)
-
-    # Generate Event Name Suggestions
-    if name_conv["stage"] == "suggesting":
-        summary_prompt = f"""
-        Based on the user's responses, generate 5 creative and relevant event name suggestions.
-
-        Event details:
-        Category: {context.get("hackathon_details", {}).get("drillCategory", "")}
-        Subcategory: {context.get("hackathon_details", {}).get("drillSubCategory", "")}
-        User input: {name_conv.get("collected_info", {})}
-
-        Rules:
-        - Names should be professional and catchy.
-        - Provide **only the names**, one per line.
-        - Names should be relevant to the event type and purpose.
-        - Each name should be unique and memorable.
+        Return ONLY the name they selected (if any), otherwise return "NO_SELECTION".
         """
+        response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Which name did the user choose?")])
+        selected_name = response.content.strip()
 
-        response = llm.invoke([SystemMessage(content=summary_prompt), HumanMessage(content="Suggest event names.")])
-        suggestions = [s.strip() for s in response.content.strip().split("\n") if s.strip()]
+        if selected_name != "NO_SELECTION":
+            context["hackathon_details"]["drillName"] = selected_name
+            name_conv["is_name_finalized"] = True
+            name_conv["llm_active"] = False  # Stop LLM after name selection
+
+            return {
+                "message": f"Great! {selected_name} is your event name. When do you want to organize it?",
+                "context": context,
+                "current_question": "phaseStartDt"
+            }
+
+    # If the user wants more suggestions
+    if is_requesting_more_suggestions(user_input, llm):
+        name_conv["attempts"] += 1
+        if name_conv["attempts"] > 2:
+            return {
+                "message": "I've already given multiple suggestions. Let me know which one you like!",
+                "context": context,
+                "current_question": "drillName"
+            }
+
+        # Generate new suggestions
+        prompt = f"""
+        The user wants more event name suggestions. Generate a fresh set of names that are **different** from:
+        {name_conv["previous_suggestions"]}.
         
-        # Ensure we have exactly 5 suggestions
-        while len(suggestions) > 5:
-            suggestions.pop()
-        
-        # If we somehow got less than 5, add generic ones
-        while len(suggestions) < 5:
-            suggestions.append(f"Innovative {context.get('hackathon_details', {}).get('drillSubCategory', 'Event')} {len(suggestions) + 1}")
+        Keep them **short, catchy, and relevant to** "{context.get('hackathon_details', {}).get('drillSubCategory', 'event')}".  
+        """
+        response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Generate different event name suggestions.")])
+        llm_output = response.content.strip()
 
-        name_conv["stage"] = "awaiting_choice"
-        session_data["suggested_names"] = suggestions
-        session_data["name_conversation"] = name_conv
-
+        name_conv["previous_suggestions"] = llm_output.split("\n")
         return {
-            "message": "Here are some event name suggestions:\n" + "\n".join(f"{i+1}. {s}" for i, s in enumerate(suggestions)),
-            "suggestions": suggestions,
-            "requires_selection": True,
+            "message": f"Here are some new ideas:\n\n{llm_output}\n\nDo any of these work for you?",
             "context": context,
             "current_question": "drillName"
         }
-    
-    # Fallback response if none of the above conditions are met
+
+    # Generate name suggestions for the first time
+    name_conv["llm_active"] = True
+
+    prompt = f"""
+    The user needs help naming their event. Generate **5-7 catchy, relevant event names** based on the event details.
+
+    **User input so far:** "{user_input}"
+
+    **Steps:**  
+    1️⃣ Extract **3-5 important keywords** from the user's description.  
+    2️⃣ Generate **5-7 short, catchy event names** using these keywords.  
+    3️⃣ Provide the names in a simple list format.  
+    4️⃣ End with the question: **"Do any of these work for you?"**  
+    """
+
+    response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Generate event name suggestions.")])
+    llm_output = response.content.strip()
+
+    name_conv["previous_suggestions"] = llm_output.split("\n")
+
     return {
-        "message": "Let's give your event a name. What would you like to call it?",
+        "message": llm_output,
         "context": context,
         "current_question": "drillName"
     }
 
 def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[int, str]:
-    
     if not suggested_names:
         return None, None
-        
+
+    message_lower = message.lower()
+
     # Check for direct number mentions (1-5)
     for i in range(1, len(suggested_names) + 1):
         number_patterns = [
@@ -1301,514 +1081,80 @@ def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[
             f"number {i}",  # Number with word (e.g., "number 1")
             f"{i}st" if i == 1 else f"{i}nd" if i == 2 else f"{i}rd" if i == 3 else f"{i}th"  # Ordinal (e.g., "1st")
         ]
-        
         for pattern in number_patterns:
-            if re.search(pattern, message, re.IGNORECASE):
-                return i-1, suggested_names[i-1]
-    
-    # Check for exact name matches
-    for i, name in enumerate(suggested_names):
-        if name.lower() in message.lower():
-            return i, name
-    
-    # Use LLM for more advanced analysis if no simple match found
-    prompt = f"""
-    Determine which event name the user is selecting from the list of suggestions.
-    
-    User message: "{message}"
-    
-    Available suggestions:
-    {', '.join([f"{i+1}. {name}" for i, name in enumerate(suggested_names)])}
-    
-    Rules:
-    - If the user mentions a number or position (like "first one", "number 3", "the last one", etc.), select that numbered option
-    - If the user mentions a name or part of a name, select the full name that contains it
-    - If the user expresses preference ("I like", "I prefer", "let's go with", etc.) for a specific option, select it
-    - Look for partial name matches, even if the user only mentions distinctive words from the name
-    
-    Respond with ONLY the number and name in the format "NUMBER:NAME", or "NONE" if no selection can be determined.
-    For example: "1:Tech Summit 2025" or "NONE"
-    """
-    
-    try:
-        response = llm.invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content="Which suggestion did the user select?")
-        ])
-        
-        result = response.content.strip()
-        
-        if "NONE" in result:
-            return None, None
-            
-        # Parse "NUMBER:NAME" format
-        match = re.match(r"(\d+):(.*)", result)
-        if match:
-            index = int(match.group(1)) - 1
-            name = match.group(2).strip()
-            
-            # Verify the name exists in our suggestions (as a sanity check)
-            for i, suggested in enumerate(suggested_names):
-                if suggested.lower() == name.lower() or (index == i and name in suggested):
-                    return i, suggested_names[i]
-        
-        # If format parsing failed, check if the response contains any of the suggested names
-        for i, name in enumerate(suggested_names):
-            if name.lower() in result.lower():
-                return i, name
-    
-    except Exception as e:
-        print(f"Error in analyze_name_choice: {str(e)}")
-    
-    # Default: could not determine a selection
-    return None, None
+            if re.search(pattern, message_lower, re.IGNORECASE):
+                return i - 1, suggested_names[i - 1]
 
-
-def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[int, str]:
-    if not suggested_names:
-        return None, None
-        
-    # Check for direct number mentions (1-5)
-    for i in range(1, len(suggested_names) + 1):
-        number_patterns = [
-            f"^{i}$",  # Exact match (e.g., "1")
-            f"^{i}[.)]",  # Number with punctuation (e.g., "1." or "1)")
-            f"option {i}",  # Option with number (e.g., "option 1")
-            f"number {i}",  # Number with word (e.g., "number 1")
-            f"{i}st" if i == 1 else f"{i}nd" if i == 2 else f"{i}rd" if i == 3 else f"{i}th"  # Ordinal (e.g., "1st")
-        ]
-        
-        for pattern in number_patterns:
-            if re.search(pattern, message, re.IGNORECASE):
-                return i-1, suggested_names[i-1]
-    
-    # Check for exact name matches
-    for i, name in enumerate(suggested_names):
-        if name.lower() in message.lower():
-            return i, name
-    
-    # Use LLM for more advanced analysis if no simple match found
-    prompt = f"""
-    Determine which event name the user is selecting from the list of suggestions.
-    
-    User message: "{message}"
-    
-    Available suggestions:
-    {', '.join([f"{i+1}. {name}" for i, name in enumerate(suggested_names)])}
-    
-    Rules:
-    - If the user mentions a number or position (like "first one", "number 3", "the last one", etc.), select that numbered option
-    - If the user mentions a name or part of a name, select the full name that contains it
-    - If the user expresses preference ("I like", "I prefer", "let's go with", etc.) for a specific option, select it
-    - Look for partial name matches, even if the user only mentions distinctive words from the name
-    
-    Respond with ONLY the number and name in the format "NUMBER:NAME", or "NONE" if no selection can be determined.
-    For example: "1:Tech Summit 2025" or "NONE"
-    """
-    
-    try:
-        response = llm.invoke([
-            SystemMessage(content=prompt),
-            HumanMessage(content="Which suggestion did the user select?")
-        ])
-        
-        result = response.content.strip()
-        
-        if "NONE" in result:
-            return None, None
-            
-        # Parse "NUMBER:NAME" format
-        match = re.match(r"(\d+):(.*)", result)
-        if match:
-            index = int(match.group(1)) - 1
-            name = match.group(2).strip()
-            
-            # Verify the name exists in our suggestions (as a sanity check)
-            for i, suggested in enumerate(suggested_names):
-                if suggested.lower() == name.lower() or (index == i and name in suggested):
-                    return i, suggested_names[i]
-        
-        # If format parsing failed, check if the response contains any of the suggested names
-        for i, name in enumerate(suggested_names):
-            if name.lower() in result.lower():
-                return i, name
-    
-    except Exception as e:
-        print(f"Error in analyze_name_choice: {str(e)}")
-    
-    # Default: could not determine a selection
-    return None, None
-
-def handle_name_selection(message: str, suggested_names: List[str], llm) -> str:
-    clean_message = message.lower().strip()
-    
-    for name in suggested_names:
-        if name.lower() in clean_message:
-            return name
-    
-    number_map = {str(i+1): name for i, name in enumerate(suggested_names)}
-    for num, name in number_map.items():
-        if num in clean_message:
-            return name
-    
-    prompt = f"""
-    Determine which event name the user is selecting from the list of suggestions.
-    
-    User message: "{message}"
-    
-    Available suggestions:
-    {', '.join([f"{i+1}. {name}" for i, name in enumerate(suggested_names)])}
-    
-    Rules:
-    - If the user mentions a number (like "first one", "number 3", etc.), select that numbered option
-    - If the user mentions part of a name, select the full name that contains it
-    - If the user expresses preference ("I like", "I prefer", etc.) for a specific option, select it
-    
-    Return ONLY the full text of the selected name, exactly as written in the suggestions.
-    If you cannot determine a clear selection, return "UNCLEAR".
-    """
-    
-    response = llm.invoke([
-        SystemMessage(content=prompt),
-        HumanMessage(content="Which suggestion did the user select?")
-    ])
-    
-    selection = response.content.strip()
-    
-    if selection in suggested_names:
-        return selection
-    
-    if "UNCLEAR" in selection:
-        return None
-    
-    for name in suggested_names:
-        if name.lower() in selection.lower():
-            return name
-    
-    return None
-
-
-def extract_naming_context(user_input: str, event_type: str, llm) -> Dict[str, Any]:
-
-    prompt = f"""
-    Extract information from the user's message that would be helpful for naming a {event_type}.
-    Focus on topic, audience, purpose, goals, industry, and any specific keywords mentioned.
-    Also determine if we have sufficient information to suggest good event names.
-    
-    User message: "{user_input}"
-    
-    Output format (JSON):
-    {{
-        "topic": "extracted topic or null",
-        "audience": "extracted audience or null",
-        "purpose": "extracted purpose or null", 
-        "industry": "extracted industry or null",
-        "keywords": ["keyword1", "keyword2", ...],
-        "tone_preference": "formal/creative/technical/etc or null",
-        "sufficient_info": true/false
-    }}
-    """
-    
-    try:
-        response = llm.invoke([{"role": "system", "content": prompt}])
-        result = extract_json_from_response(response.content)
-        if result:
-            return result
-    except Exception as e:
-        print(f"Error extracting context with LLM: {str(e)}")
-    
-    # Default fallback
-    return {
-        "topic": None,
-        "audience": None,
-        "purpose": None,
-        "industry": None,
-        "keywords": [],
-        "tone_preference": None,
-        "sufficient_info": False
+    # Check for "first", "last", "second", etc.
+    ordinal_mappings = {
+        "first": 0,
+        "second": 1,
+        "third": 2,
+        "fourth": 3,
+        "fifth": 4,
+        "last": len(suggested_names) - 1
     }
+    for word, index in ordinal_mappings.items():
+        if word in message_lower:
+            return index, suggested_names[index]
 
-def ask_contextual_question(name_conv: Dict[str, Any], context: Dict[str, Any], event_type: str, llm) -> str:
+    # Check for exact name matches
+    for i, name in enumerate(suggested_names):
+        if name.lower() in message_lower:
+            return i, name
 
-    extracted_info = name_conv["extracted_info"]
-    
+    # Check for phrases indicating preference
+    preference_keywords = ["i like", "i prefer", "let's go with", "choose", "select"]
+    for keyword in preference_keywords:
+        if keyword in message_lower:
+            for i, name in enumerate(suggested_names):
+                if name.lower() in message_lower:
+                    return i, name
+
+    # Use LLM for advanced analysis if no simple match found
     prompt = f"""
-    I'm helping a user name a {event_type}. Based on the information I have so far, generate a single focused question
-    to gather more relevant naming context. Make the question conversational and natural.
+    Determine which event name the user is selecting from the list of suggestions.
     
-    Current information:
-    - Event type: {event_type}
-    - Topic: {extracted_info.get('topic')}
-    - Audience: {extracted_info.get('audience')}
-    - Purpose: {extracted_info.get('purpose')}
-    - Industry: {extracted_info.get('industry')}
-    - Keywords: {', '.join(extracted_info.get('keywords', []))}
+    User message: "{message}"
     
-    What's missing is information about: {', '.join([k for k, v in extracted_info.items() if not v and k != 'sufficient_info' and k != 'keywords'])}
+    Available suggestions:
+    {', '.join([f"{i+1}. {name}" for i, name in enumerate(suggested_names)])}
     
-    Generate only ONE question to gather the most important missing information. Keep it concise:
+    Rules:
+    - If the user mentions a number or position (like "first one", "number 3", "the last one", etc.), select that numbered option
+    - If the user mentions a name or part of a name, select the full name that contains it
+    - If the user expresses preference ("I like", "I prefer", "let's go with", etc.) for a specific option, select it
+    - Look for partial name matches, even if the user only mentions distinctive words from the name
+    
+    Respond with ONLY the number and name in the format "NUMBER:NAME", or "NONE" if no selection can be determined.
+    For example: "1:Tech Summit 2025" or "NONE"
     """
-    
     try:
-        response = llm.invoke([{"role": "system", "content": prompt}])
-        question = response.content.strip()
-        # Remove any leading assistant formatting that might be included
-        question = re.sub(r'^(Assistant: |Question: )', '', question)
-        return question
+        response = llm.invoke([
+            SystemMessage(content=prompt),
+            HumanMessage(content="Which suggestion did the user select?")
+        ])
+        result = response.content.strip()
+
+        if "NONE" in result:
+            return None, None
+
+        # Parse "NUMBER:NAME" format
+        match = re.match(r"(\d+):(.*)", result)
+        if match:
+            index = int(match.group(1)) - 1
+            name = match.group(2).strip()
+            # Verify the name exists in our suggestions (as a sanity check)
+            for i, suggested in enumerate(suggested_names):
+                if suggested.lower() == name.lower() or (index == i and name in suggested):
+                    return i, suggested_names[i]
+
+        # If format parsing failed, check if the response contains any of the suggested names
+        for i, name in enumerate(suggested_names):
+            if name.lower() in result.lower():
+                return i, name
+
     except Exception as e:
-        print(f"Error generating question with LLM: {str(e)}")
-    
-    # Default fallback questions based on the event stage
-    if name_conv["attempts"] == 0:
-        return f"To help name your {event_type}, could you tell me more about the main focus or topic?"
-    else:
-        return "What's the target audience or key goal for this event?"
+        print(f"Error in analyze_name_choice: {str(e)}")
 
-def suggest_names_based_on_context(name_conv: Dict[str, Any], context: Dict[str, Any], event_type: str, llm) -> str:
-
-    extracted_info = name_conv["extracted_info"]
-    
-    # Prepare a detailed prompt with all available context
-    info_parts = []
-    for key, value in extracted_info.items():
-        if value and key != "sufficient_info" and key != "keywords":
-            info_parts.append(f"- {key.capitalize()}: {value}")
-    
-    if extracted_info.get("keywords"):
-        info_parts.append(f"- Keywords: {', '.join(extracted_info['keywords'])}")
-    
-    context_str = "\n".join(info_parts)
-    
-    prompt = f"""
-    Generate 2-3 catchy, memorable names for a {event_type} based on the following information:
-    
-    {context_str}
-    
-    The names should be concise, relevant, and clearly convey the purpose of the event.
-    Each suggestion should be different in style or approach.
-    
-    Output format (JSON):
-    {{
-        "suggestions": [
-            {{
-                "name": "Suggestion 1",
-                "rationale": "Brief explanation of why this name works"
-            }},
-            {{
-                "name": "Suggestion 2",
-                "rationale": "Brief explanation of why this name works"
-            }},
-            ...
-        ]
-    }}
-    """
-    
-    try:
-        response = llm.invoke([{"role": "system", "content": prompt}])
-        result = extract_json_from_response(response.content)
-        
-        if result and "suggestions" in result and len(result["suggestions"]) > 0:
-            suggestions = result["suggestions"]
-            name_conv["suggested_names"] = suggestions
-            name_conv["stage"] = "suggestion"
-            
-            # Format the response with the suggestions
-            response_parts = ["Based on what you've told me, here are some name suggestions for your event:"]
-            
-            for i, suggestion in enumerate(suggestions):
-                response_parts.append(f"{i+1}. \"{suggestion['name']}\" - {suggestion['rationale']}")
-            
-            response_parts.append("\nDo any of these names work for you? Or would you like me to generate more options?")
-            return "\n\n".join(response_parts)
-    except Exception as e:
-        print(f"Error generating suggestions with LLM: {str(e)}")
-    
-    # Fallback suggestion if the LLM call fails
-    default_suggestion = f"Innovation {event_type}"
-    name_conv["suggested_names"] = [{"name": default_suggestion, "rationale": "A simple, clear name for your event."}]
-    name_conv["stage"] = "suggestion"
-    
-    return f"I suggest naming your event: \"{default_suggestion}\". Does this work for you? (Or would you like more suggestions?)"
-
-def evaluate_name_feedback(user_input: str, name_conv: Dict[str, Any], context: Dict[str, Any], llm) -> str:
-
-    suggested_names = [s["name"] for s in name_conv["suggested_names"]]
-    
-    for name in suggested_names:
-        # Check if user explicitly mentioned a name (case insensitive, allowing for some variation)
-        if name.lower() in user_input.lower() or re.search(rf"\b{re.escape(name.lower())}\b", user_input.lower()):
-            name_conv["final_name"] = name
-            name_conv["stage"] = "completed"
-            context["hackathon_details"]["drillName"] = name
-            return f"Great! I've set the event name to '{name}'."
-    
-    # Use LLM to interpret complex feedback
-    prompt = f"""
-    Analyze the user's response to these event name suggestions:
-    {', '.join('"' + s["name"] + '"' for s in name_conv["suggested_names"])}
-    
-    User response: "{user_input}"
-    
-    Output format (JSON):
-    {{
-        "liked_any": true/false,
-        "selected_name": "specific name they liked or null",
-        "wants_more_suggestions": true/false,
-        "provided_own_name": true/false,
-        "own_name": "their provided name or null",
-        "sentiment": "positive/neutral/negative"
-    }}
-    """
-    
-    try:
-        response = llm.invoke([{"role": "system", "content": prompt}])
-        result = extract_json_from_response(response.content)
-        
-        if result:
-            # If user liked one of the suggestions
-            if result.get("liked_any") and result.get("selected_name"):
-                name_conv["final_name"] = result["selected_name"]
-                name_conv["stage"] = "completed"
-                context["hackathon_details"]["drillName"] = result["selected_name"]
-                return f"Great! I've set the event name to '{result['selected_name']}'."
-                
-            # If user provided their own name
-            elif result.get("provided_own_name") and result.get("own_name"):
-                name_conv["final_name"] = result["own_name"]
-                name_conv["stage"] = "completed"
-                context["hackathon_details"]["drillName"] = result["own_name"]
-                return f"Great! I've set the event name to '{result['own_name']}'."
-                
-            # If user wants more suggestions
-            elif result.get("wants_more_suggestions"):
-                # Generate new suggestions with explicit instructions to make them different
-                event_type = context["hackathon_details"].get("drillSubCategory", "Event")
-                
-                prompt = f"""
-                Generate 2-3 NEW and DIFFERENT catchy, memorable names for a {event_type}.
-                Make them notably different from previous suggestions: {', '.join('"' + s["name"] + '"' for s in name_conv["suggested_names"])}
-                
-                Context information:
-                {', '.join([f"{k}: {v}" for k, v in name_conv["extracted_info"].items() if v and k != "sufficient_info"])}
-                
-                Output format (JSON):
-                {{
-                    "suggestions": [
-                        {{
-                            "name": "New Suggestion 1",
-                            "rationale": "Brief explanation of why this name works"
-                        }},
-                        ...
-                    ]
-                }}
-                """
-                
-                try:
-                    new_response = llm.invoke([{"role": "system", "content": prompt}])
-                    new_result = extract_json_from_response(new_response.content)
-                    
-                    if new_result and "suggestions" in new_result and len(new_result["suggestions"]) > 0:
-                        name_conv["suggested_names"] = new_result["suggestions"]
-                        
-                        response_parts = ["Here are some more name options for your event:"]
-                        for i, suggestion in enumerate(new_result["suggestions"]):
-                            response_parts.append(f"{i+1}. \"{suggestion['name']}\" - {suggestion['rationale']}")
-                        
-                        response_parts.append("\nDo any of these names work better for you?")
-                        return "\n\n".join(response_parts)
-                except Exception as e:
-                    print(f"Error generating new suggestions: {str(e)}")
-    except Exception as e:
-        print(f"Error evaluating feedback: {str(e)}")
-    
-    # Fallback: If we couldn't clearly interpret the response, ask more directly
-    return "Would you like to go with one of the suggested names, or would you prefer to provide your own name for the event?"
-
-def extract_json_from_response(response_text: str) -> Dict[str, Any]:
-
-    try:
-        # Try to find a JSON block in the response
-        json_match = re.search(r'```json\n(.*?)\n```|```(.*?)```|\{.*\}', response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(1) or json_match.group(2) or json_match.group(0)
-            # Clean up the JSON string
-            json_str = re.sub(r'```json|```', '', json_str)
-            return json.loads(json_str)
-        
-        # If no JSON block found, try parsing the entire response
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        print(f"Failed to parse JSON from: {response_text}")
-        return None
-
-def clean_json_response(response: str) -> str:
-    
-    response = re.sub(r'```json\s*|```\s*', '', response)
-    
-    response = response.strip()
-    
-    if not response.startswith('{'):
-        json_start = response.find('{')
-        if json_start != -1:
-            response = response[json_start:]
-    
-    if not response.endswith('}'):
-        json_end = response.rfind('}')
-        if json_end != -1:
-            response = response[:json_end + 1]
-    
-    return response
-
-
-def generate_names_by_subcategory(subcategory: str, llm=None) -> List[str]:
-
-    if llm is None:
-        llm = get_llm()
-    
-    prompt = f"""
-    Based on the subcategory '{subcategory}', suggest 5 event names that would be suitable for this category.
-    """
-    
-    response = llm.invoke(prompt)
-    subcategory_names = response.content.strip().split('\n')
-    
-    return [name.strip() for name in subcategory_names if name.strip()]
-
-def generate_similar_names(name: str, llm=None) -> List[str]:
-    if llm is None:
-        llm = get_llm()
-    
-    prompt = f"""
-    Suggest similar names for the event name '{name}'. Provide a list of 5 names that are similar in style or theme.
-    """
-    
-    response = llm.invoke(prompt)
-    similar_names = response.content.strip().split('\n')
-    
-    return [name.strip() for name in similar_names if name.strip()]
-
-def handle_user_name_choice(user_input: str, suggestions: List[str], original_name: str, llm=None) -> str:
-    if llm is None:
-        llm = get_llm()
-    
-
-    if user_input.lower() in ["keep original", "original", "my name"]:
-        return original_name
-    
-
-    prompt = f"""
-    The user has provided the following input: '{user_input}'.
-    Determine if the user wants to keep their original name '{original_name}' or choose from the suggestions: {suggestions}.
-    Respond with 'keep_original' if they want to keep the original name, or return the chosen suggestion if they select one.
-    If the input is unclear, respond with 'ambiguous'.
-    """
-    
-    response = llm.invoke(prompt)
-    inferred_intent = response.content.strip()
-    
-    if inferred_intent == "keep_original":
-        return original_name
-    elif inferred_intent in suggestions:
-        return inferred_intent
-    else:
-        return None
+    return None, None
