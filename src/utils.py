@@ -885,20 +885,19 @@ def infer_eligibility(user_response: str, llm=None) -> list:
 
 
 def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
-    
     prompt = f"""
     User input: "{user_input}"
     
     Your task is to determine if the user has provided an event name or if they are asking for suggestions.
     
     Examples:
-    - "I want to name it TechFest" → They provided the name "TechFest"
-    - "Let's call it Innovate 2023" → They provided the name "Innovate 2023"
-    - "I don't know what to name it" → They are uncertain, need suggestions
-    - "Can you suggest some names?" → They are uncertain, need suggestions
+    - "I want to name it TechFest" â†’ They provided the name "TechFest"
+    - "Let's call it Innovate 2023" â†’ They provided the name "Innovate 2023"
+    - "I don't know what to name it" â†’ They are uncertain, need suggestions
+    - "Can you suggest some names?" â†’ They are uncertain, need suggestions
     
     Rules:
-    - If the user has CLEARLY mentioned a name, for example: "technohack","techdeva","technovate", extract it exactly as they said.
+    - If the user has CLEARLY mentioned a name, for example: "technohack","techdeva","technovate", extract  it exactly as they said.
     - If there's any sign of uncertainty (e.g., "I don't know", "not sure", "help me", "can you suggest"), mark as NO_NAME_PROVIDED.
     - If the user seems to be asking a question rather than stating a name, mark as NO_NAME_PROVIDED.
     
@@ -907,37 +906,34 @@ def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
         "has_name": true/false,
         "extracted_name": "Event Name" or "NO_NAME_PROVIDED"
     }}
+    Ensure that you capture the entire name, including any additional parts after a colon (e.g., "DataBex : Data Science And AI" should be captured as "DataBex : Data Science And AI").
     """
 
-    #  Step 2: Make a more explicit request to the LLM
     response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Extract event name if given, otherwise indicate uncertainty.")])
 
     try:
-        #  Step 3: Improved error handling and response parsing
         llm_output = response.content.strip()
-        
-        # Try to extract JSON from potential markdown code blocks
         if "```json" in llm_output:
-            # Extract JSON content from markdown code block
             json_start = llm_output.find("```json") + 7
             json_end = llm_output.find("```", json_start)
             llm_output = llm_output[json_start:json_end].strip()
         
         result = json.loads(llm_output)
 
-        #  Step 4: More explicit decision logic
         if result.get("has_name", False) and result.get("extracted_name") != "NO_NAME_PROVIDED":
-            print(f" Name detected: {result['extracted_name']}")
+            print(f"Name detected: {result['extracted_name']}")
             return True, result["extracted_name"]
         
-        # Step 5: Log decision for debugging
-        print("❌ No name detected, user is uncertain")
+        print("No name detected, user is uncertain")
         return False, None  
 
     except (json.JSONDecodeError, KeyError) as e:
-        # Step 6: Improved error logging
         print(f"Error parsing LLM response: {e}")
         print(f"LLM output was: {llm_output}")
+        return False, None
+
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}")
         return False, None
     
 session_store = {}
@@ -974,7 +970,6 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
     session_data = session_store[session_id]
     name_conv = session_data["name_conversation"]
 
-    # If a name has already been chosen, move forward
     if context["hackathon_details"].get("drillName"):
         return {
             "message": f"Your event name is set to '{context['hackathon_details']['drillName']}'. When do you want to organize it?",
@@ -982,7 +977,6 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
             "current_question": "phaseStartDt"
         }
 
-    # Check if the user is selecting a name from previous suggestions
     if name_conv["previous_suggestions"]:
         prompt = f"""
         The user was given these event name suggestions:
@@ -991,11 +985,11 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
         Now, the user responded with: "{user_input}"
 
         Determine if they are expressing preference for one of the names. Examples:
-        - "I like Next Gen AI" → selects "Next Gen AI"
-        - "Let's go with AI Thrive Workshop" → selects "AI Thrive Workshop"
-        - "I prefer AI Launchpad" → selects "AI Launchpad"
-        - "Give me more suggestions" → NO selection, request new names
-        - "None of these work" → NO selection, request new names
+        - "I like Next Gen AI" â†’ selects "Next Gen AI"
+        - "Let's go with AI Thrive Workshop" â†’ selects "AI Thrive Workshop"
+        - "I prefer AI Launchpad" â†’ selects "AI Launchpad"
+        - "Give me more suggestions" â†’ NO selection, request new names
+        - "None of these work" â†’ NO selection, request new names
 
         Return ONLY the name they selected (if any), otherwise return "NO_SELECTION".
         """
@@ -1013,7 +1007,6 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
                 "current_question": "phaseStartDt"
             }
 
-    # If the user wants more suggestions
     if is_requesting_more_suggestions(user_input, llm):
         name_conv["attempts"] += 1
         if name_conv["attempts"] > 2:
@@ -1023,7 +1016,6 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
                 "current_question": "drillName"
             }
 
-        # Generate new suggestions
         prompt = f"""
         The user wants more event name suggestions. Generate a fresh set of names that are **different** from:
         {name_conv["previous_suggestions"]}.
@@ -1040,7 +1032,6 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
             "current_question": "drillName"
         }
 
-    # Generate name suggestions for the first time
     name_conv["llm_active"] = True
 
     prompt = f"""
@@ -1049,10 +1040,10 @@ async def handle_name_suggestion(session_id: str, user_input: str, context: Dict
     **User input so far:** "{user_input}"
 
     **Steps:**  
-    1️⃣ Extract **3-5 important keywords** from the user's description.  
-    2️⃣ Generate **5-7 short, catchy event names** using these keywords.  
-    3️⃣ Provide the names in a simple list format.  
-    4️⃣ End with the question: **"Do any of these work for you?"**  
+    1. Extract **3-5 important keywords** from the user's description.  
+    2. Generate **5-7 short, catchy event names** using these keywords.  
+    3. Provide the names in a simple list format.  
+    4. End with the question: **"Do any of these work for you?"**  
     """
 
     response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Generate event name suggestions.")])
@@ -1072,20 +1063,18 @@ def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[
 
     message_lower = message.lower()
 
-    # Check for direct number mentions (1-5)
     for i in range(1, len(suggested_names) + 1):
         number_patterns = [
-            f"^{i}$",  # Exact match (e.g., "1")
-            f"^{i}[.)]",  # Number with punctuation (e.g., "1." or "1)")
-            f"option {i}",  # Option with number (e.g., "option 1")
-            f"number {i}",  # Number with word (e.g., "number 1")
-            f"{i}st" if i == 1 else f"{i}nd" if i == 2 else f"{i}rd" if i == 3 else f"{i}th"  # Ordinal (e.g., "1st")
+            f"^{i}$",
+            f"^{i}[.)]",
+            f"option {i}",
+            f"number {i}",
+            f"{i}st" if i == 1 else f"{i}nd" if i == 2 else f"{i}rd" if i == 3 else f"{i}th"
         ]
         for pattern in number_patterns:
             if re.search(pattern, message_lower, re.IGNORECASE):
                 return i - 1, suggested_names[i - 1]
 
-    # Check for "first", "last", "second", etc.
     ordinal_mappings = {
         "first": 0,
         "second": 1,
@@ -1098,12 +1087,10 @@ def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[
         if word in message_lower:
             return index, suggested_names[index]
 
-    # Check for exact name matches
     for i, name in enumerate(suggested_names):
         if name.lower() in message_lower:
             return i, name
 
-    # Check for phrases indicating preference
     preference_keywords = ["i like", "i prefer", "let's go with", "choose", "select"]
     for keyword in preference_keywords:
         if keyword in message_lower:
@@ -1111,7 +1098,6 @@ def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[
                 if name.lower() in message_lower:
                     return i, name
 
-    # Use LLM for advanced analysis if no simple match found
     prompt = f"""
     Determine which event name the user is selecting from the list of suggestions.
     
@@ -1139,17 +1125,14 @@ def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[
         if "NONE" in result:
             return None, None
 
-        # Parse "NUMBER:NAME" format
         match = re.match(r"(\d+):(.*)", result)
         if match:
             index = int(match.group(1)) - 1
             name = match.group(2).strip()
-            # Verify the name exists in our suggestions (as a sanity check)
             for i, suggested in enumerate(suggested_names):
                 if suggested.lower() == name.lower() or (index == i and name in suggested):
                     return i, suggested_names[i]
 
-        # If format parsing failed, check if the response contains any of the suggested names
         for i, name in enumerate(suggested_names):
             if name.lower() in result.lower():
                 return i, name
