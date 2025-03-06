@@ -10,3 +10,4 @@ pymysql
 beautifulsoup4
 uvicorn
 urllib3
+playwright
