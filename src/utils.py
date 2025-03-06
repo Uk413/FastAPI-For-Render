@@ -3,12 +3,14 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import os
+from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, List, Any
 import pytz
 from dateutil import parser
 import pymysql
+import asyncio
 from src.constants import CATEGORY_SUBCATEGORY_MAP
 from bs4 import BeautifulSoup
 import requests
@@ -494,6 +496,7 @@ def generate_faq_answers(drill_info: dict, llm=None) -> list:
 def extract_partner_info(url: str, llm=None) -> dict:
     """
     Extracts partner information from a given URL with improved error handling.
+    Includes Playwright-based scraping and LLM processing.
     """
     print(f"\n=== Starting partner info extraction for URL: {url} ===")
     
@@ -505,8 +508,27 @@ def extract_partner_info(url: str, llm=None) -> dict:
         if not url.startswith(('http://', 'https://')):
             url = f'https://{url}'
         print(f"Normalized URL: {url}")
-        
-        # Configure session
+
+        # Try Playwright scraping first
+        try:
+            # Run async Playwright in sync context
+            html_content = asyncio.run(async_scrape_with_playwright(url))
+                
+            # Process with LLM
+            llm_response = process_with_llm(html_content, url)
+            
+            # Try to parse the LLM response
+            try:
+                partner_info = json.loads(llm_response)
+                print("Successfully extracted info using Playwright and LLM")
+                return partner_info
+            except json.JSONDecodeError:
+                print("Failed to parse LLM response, falling back to BeautifulSoup")
+                
+        except Exception as e:
+            print(f"Playwright scraping failed: {str(e)}, falling back to requests")
+            
+        # Fallback to original requests-based scraping
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -598,6 +620,53 @@ def extract_partner_info(url: str, llm=None) -> dict:
             "partnerIndustry": "Technology",
             "partnerSocialLinks": json.dumps({"websiteurl": url})
         }
+    
+async def async_scrape_with_playwright(url: str) -> str:
+    """
+    Asynchronously scrape content using Playwright.
+    """
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.goto(url, timeout=60000)
+        html_content = await page.content()
+        await browser.close()
+        return html_content
+
+def process_with_llm(html_content: str, company_url: str) -> str:
+    """
+    Process HTML content with LLM to extract structured company information.
+    """
+    prompt = f"""
+    Analyze the following HTML page source and extract structured company details in JSON format:
+    - Company Name
+    - Establishment Year
+    - Industry Type
+    - Description
+    - Logo URL (if available)
+    
+    Given HTML Content: ```{html_content[:2000]}```
+    
+    Return JSON format as follows:
+    {{
+      "active": true,
+      "customUrl": "<shortened-company-name>",
+      "partnerDisplayName": "<company name>",
+      "partnerEstablishmentDate": "<year>",
+      "partnerLogoPath": "<logo-url or NA>",
+      "partnerName": "<full legal name>",
+      "partnerType": "<type>",
+      "partnerDescription": "<description>",
+      "partnerIndustry": "<industry>",
+      "partnerSocialLinks": {{
+        "websiteurl": "{company_url}"
+      }}
+    }}
+    """
+    
+    messages = [{"role": "user", "content": prompt}]
+    response = llm.invoke(messages)
+    return response.content
 
 def get_existing_partner(partner_name: str) -> Optional[dict]:
     
