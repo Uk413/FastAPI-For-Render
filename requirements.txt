@@ -1,3 +1,4 @@
+playwright
 fastapi
 pydantic
 python-dotenv
@@ -10,4 +11,3 @@ pymysql
 beautifulsoup4
 uvicorn
 urllib3
-playwright
