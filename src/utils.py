@@ -320,6 +320,26 @@ def infer_subcategory(user_response: str, category_subcategory_map: dict, llm=No
     inferred_subcategory = response.content.strip().upper()
     return inferred_subcategory if inferred_subcategory in category_subcategory_map else ""
 
+def infer_drill_type(user_response: str, llm=None) -> str:
+    """Use LLM to infer the drill type as 'Theme Based' or 'Problem Based'."""
+    if llm is None:
+        llm = get_llm()
+
+    prompt = f"""
+    Based on the user input: '{user_response}', determine whether the drill type should be 'Theme Based' or 'Problem Based'.
+    
+    - If the input contains keywords like 'theme', 'topic', or 'thematic', infer 'Theme Based'.
+    - If the input contains words like 'problem', 'challenge', or 'issue', infer 'Problem Based'.
+    - If it's unclear, default to 'Problem Based'.
+    
+    Respond with only 'Theme Based' or 'Problem Based'.
+    """
+
+    response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Infer the drill type.")])
+    inferred_drill_type = response.content.strip()
+
+    return inferred_drill_type if inferred_drill_type in ["Theme Based", "Problem Based"] else "Problem Based"
+
 def infer_yes_no(user_response: str, llm=None) -> str:
     """Use LLM to infer whether the user's response is 'Yes' or 'No'."""
     if llm is None:
@@ -957,25 +977,41 @@ def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
     prompt = f"""
     User input: "{user_input}"
     
-    Your task is to determine if the user has provided an event name or if they are asking for suggestions.
+    Your task is to analyze the user's input and determine if they have explicitly provided a name for an event or if they are seeking suggestions or are uncertain about the name.
     
-    Examples:
-    - "I want to name it TechFest" â†’ They provided the name "TechFest"
-    - "Let's call it Innovate 2023" â†’ They provided the name "Innovate 2023"
-    - "I don't know what to name it" â†’ They are uncertain, need suggestions
-    - "Can you suggest some names?" â†’ They are uncertain, need suggestions
-    
-    Rules:
-    - If the user has CLEARLY mentioned a name, for example: "technohack","techdeva","technovate", extract  it exactly as they said.
-    - If there's any sign of uncertainty (e.g., "I don't know", "not sure", "help me", "can you suggest"), mark as NO_NAME_PROVIDED.
-    - If the user seems to be asking a question rather than stating a name, mark as NO_NAME_PROVIDED.
+    **Understanding the Flexibility of Name Recognition:**
+    - Event names can vary greatly in format and style. They might be single words, phrases, or include numbers, symbols, and even colons with descriptions.
+    - Focus on recognizing the user's intent to provide a name, regardless of the specific format.
+    - Be tolerant of variations in spelling and capitalization, as long as the user's intended name is clear.
+    - Look for direct statements of intent such as "I want to name it...", "Let's call it...", "It's called...", "The name is...", "I'm thinking of...".
+    - Consider context: even if the user doesn't use those exact phrases, if it's clear they are designating a name, capture it.
+
+    **Examples:**
+    - "I want to name it TechFest" → They provided the name "TechFest"
+    - "Let's call it Innovate 2023" → They provided the name "Innovate 2023"
+    - "I don't know what to name it" → They are uncertain, need suggestions
+    - "Can you suggest some names?" → They are uncertain, need suggestions
+    - "The event name will be 'Code Fusion'" → They provided the name "Code Fusion"
+    - "It's called the Global AI Summit" → They provided the name "Global AI Summit"
+    - "I'm thinking of 'DataBex : Data Science And AI'" → They provided the name "DataBex : Data Science And AI"
+    - "How about Quantum Leap?" → They provided the name "Quantum Leap"
+    - "Technohack" → They provided the name "Technohack"
+    - "techdeva" → They provided the name "techdeva"
+    - "technovate" → They provided the name "technovate"
+    - "the name is: innovation-2024" -> They provided the name "innovation-2024"
+
+    **Rules:**
+    - **Explicit Name Provision:** If the user has explicitly stated a name, extract it exactly as they have provided it, including any colons or additional descriptions.
+    - **Uncertainty Detection:** If the user expresses uncertainty (e.g., "I don't know", "not sure", "help me", "can you suggest", "any ideas?", "I need help with a name"), or asks a question about names, classify it as "NO_NAME_PROVIDED".
+    - **Contextual Understanding:** Even if the user doesn't use standard phrases, if the context clearly indicates they are providing a name, extract it.
+    - **Full Name Extraction:** Capture the entire name, including any additional parts after a colon (e.g., "DataBex : Data Science And AI").
+    - **Flexible Matching:** Recognize names even with slight variations in spelling or capitalization, if the intent is clear.
     
     Return **only a valid JSON** in this format:
     {{
         "has_name": true/false,
         "extracted_name": "Event Name" or "NO_NAME_PROVIDED"
     }}
-    Ensure that you capture the entire name, including any additional parts after a colon (e.g., "DataBex : Data Science And AI" should be captured as "DataBex : Data Science And AI").
     """
 
     response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Extract event name if given, otherwise indicate uncertainty.")])
