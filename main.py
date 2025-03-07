@@ -21,7 +21,8 @@ from src.utils import (
     handle_name_suggestion,
     infer_eligibility,
     recognize_name_intent,
-    find_partner_by_url
+    find_partner_by_url,
+    infer_drill_type
 )
 from src.constants import DEFAULT_DRILL_INFO, CATEGORY_SUBCATEGORY_MAP
 import json
@@ -201,7 +202,7 @@ async def chat_endpoint(chat_input: SessionInput):
             )
 
         elif current_question == "drillType":
-            drill_type = "Theme Based" if "theme" in message.lower() else "Product Based"
+            drill_type = infer_drill_type(message, llm)
             context["hackathon_details"]["drillType"] = drill_type
             return SessionResponse(
                 session_id=session_id,
@@ -431,7 +432,7 @@ def prepare_api_payload(drill_info: dict) -> dict:
         "hasIdeaPhase": "",
         "isSelfPaced": False,
         "schedule": [{
-            "phaseType": "HACKATHON",
+            "phaseType": drill_info["drillCategory"],
             "phaseDesc": "Hackathon Phase",
             "dateConfirmed": True,
             "phaseStartDt": phase_start_date.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
