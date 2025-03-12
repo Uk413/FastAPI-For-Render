@@ -3,15 +3,12 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 import os
-from playwright.async_api import async_playwright
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, List, Any
 import pytz
 from dateutil import parser
 import pymysql
-import asyncio
-from src.constants import CATEGORY_SUBCATEGORY_MAP
 from bs4 import BeautifulSoup
 import requests
 import json
@@ -302,24 +299,6 @@ def infer_purpose(state: dict, user_response: str, llm) -> str:
     inferred_purpose = response.content.strip().capitalize()
     return inferred_purpose if inferred_purpose in ["Innovation", "Hiring"] else "Innovation"
 
-def infer_subcategory(user_response: str, category_subcategory_map: dict, llm=None) -> str:
-    if llm is None:
-        llm = get_llm()
-    """Use LLM to infer the most relevant subcategory."""
-    valid_subcategories = list(category_subcategory_map.keys())
-    prompt = f"""
-    Given the user input: '{user_response}', determine the most relevant subcategory from the following list:
-    {valid_subcategories}.
-    If no clear match is found, return an empty string.
-    """
-    prompt_template = ChatPromptTemplate.from_messages([
-        ("system", prompt),
-        ("human", "Provide the inferred subcategory.")
-    ])
-    response = (prompt_template | llm).invoke({})
-    inferred_subcategory = response.content.strip().upper()
-    return inferred_subcategory if inferred_subcategory in category_subcategory_map else ""
-
 def infer_drill_type(user_response: str, llm=None) -> str:
     """Use LLM to infer the drill type as 'Theme Based' or 'Problem Based'."""
     if llm is None:
@@ -339,6 +318,24 @@ def infer_drill_type(user_response: str, llm=None) -> str:
     inferred_drill_type = response.content.strip()
 
     return inferred_drill_type if inferred_drill_type in ["Theme Based", "Problem Based"] else "Problem Based"
+
+def infer_subcategory(user_response: str, category_subcategory_map: dict, llm=None) -> str:
+    if llm is None:
+        llm = get_llm()
+    """Use LLM to infer the most relevant subcategory."""
+    valid_subcategories = list(category_subcategory_map.keys())
+    prompt = f"""
+    Given the user input: '{user_response}', determine the most relevant subcategory from the following list:
+    {valid_subcategories}.
+    If no clear match is found, return an empty string.
+    """
+    prompt_template = ChatPromptTemplate.from_messages([
+        ("system", prompt),
+        ("human", "Provide the inferred subcategory.")
+    ])
+    response = (prompt_template | llm).invoke({})
+    inferred_subcategory = response.content.strip().upper()
+    return inferred_subcategory if inferred_subcategory in category_subcategory_map else ""
 
 def infer_yes_no(user_response: str, llm=None) -> str:
     """Use LLM to infer whether the user's response is 'Yes' or 'No'."""
@@ -516,7 +513,6 @@ def generate_faq_answers(drill_info: dict, llm=None) -> list:
 def extract_partner_info(url: str, llm=None) -> dict:
     """
     Extracts partner information from a given URL with improved error handling.
-    Includes Playwright-based scraping and LLM processing.
     """
     print(f"\n=== Starting partner info extraction for URL: {url} ===")
     
@@ -528,27 +524,8 @@ def extract_partner_info(url: str, llm=None) -> dict:
         if not url.startswith(('http://', 'https://')):
             url = f'https://{url}'
         print(f"Normalized URL: {url}")
-
-        # Try Playwright scraping first
-        try:
-            # Run async Playwright in sync context
-            html_content = asyncio.run(async_scrape_with_playwright(url))
-                
-            # Process with LLM
-            llm_response = process_with_llm(html_content, url)
-            
-            # Try to parse the LLM response
-            try:
-                partner_info = json.loads(llm_response)
-                print("Successfully extracted info using Playwright and LLM")
-                return partner_info
-            except json.JSONDecodeError:
-                print("Failed to parse LLM response, falling back to BeautifulSoup")
-                
-        except Exception as e:
-            print(f"Playwright scraping failed: {str(e)}, falling back to requests")
-            
-        # Fallback to original requests-based scraping
+        
+        # Configure session
         session = requests.Session()
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -640,53 +617,6 @@ def extract_partner_info(url: str, llm=None) -> dict:
             "partnerIndustry": "Technology",
             "partnerSocialLinks": json.dumps({"websiteurl": url})
         }
-    
-async def async_scrape_with_playwright(url: str) -> str:
-    """
-    Asynchronously scrape content using Playwright.
-    """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-        await page.goto(url, timeout=60000)
-        html_content = await page.content()
-        await browser.close()
-        return html_content
-
-def process_with_llm(html_content: str, company_url: str) -> str:
-    """
-    Process HTML content with LLM to extract structured company information.
-    """
-    prompt = f"""
-    Analyze the following HTML page source and extract structured company details in JSON format:
-    - Company Name
-    - Establishment Year
-    - Industry Type
-    - Description
-    - Logo URL (if available)
-    
-    Given HTML Content: ```{html_content[:2000]}```
-    
-    Return JSON format as follows:
-    {{
-      "active": true,
-      "customUrl": "<shortened-company-name>",
-      "partnerDisplayName": "<company name>",
-      "partnerEstablishmentDate": "<year>",
-      "partnerLogoPath": "<logo-url or NA>",
-      "partnerName": "<full legal name>",
-      "partnerType": "<type>",
-      "partnerDescription": "<description>",
-      "partnerIndustry": "<industry>",
-      "partnerSocialLinks": {{
-        "websiteurl": "{company_url}"
-      }}
-    }}
-    """
-    
-    messages = [{"role": "user", "content": prompt}]
-    response = llm.invoke(messages)
-    return response.content
 
 def get_existing_partner(partner_name: str) -> Optional[dict]:
     
@@ -977,41 +907,25 @@ def recognize_name_intent(user_input: str, llm) -> Tuple[bool, Optional[str]]:
     prompt = f"""
     User input: "{user_input}"
     
-    Your task is to analyze the user's input and determine if they have explicitly provided a name for an event or if they are seeking suggestions or are uncertain about the name.
+    Your task is to determine if the user has provided an event name or if they are asking for suggestions.
     
-    **Understanding the Flexibility of Name Recognition:**
-    - Event names can vary greatly in format and style. They might be single words, phrases, or include numbers, symbols, and even colons with descriptions.
-    - Focus on recognizing the user's intent to provide a name, regardless of the specific format.
-    - Be tolerant of variations in spelling and capitalization, as long as the user's intended name is clear.
-    - Look for direct statements of intent such as "I want to name it...", "Let's call it...", "It's called...", "The name is...", "I'm thinking of...".
-    - Consider context: even if the user doesn't use those exact phrases, if it's clear they are designating a name, capture it.
-
-    **Examples:**
-    - "I want to name it TechFest" → They provided the name "TechFest"
-    - "Let's call it Innovate 2023" → They provided the name "Innovate 2023"
-    - "I don't know what to name it" → They are uncertain, need suggestions
-    - "Can you suggest some names?" → They are uncertain, need suggestions
-    - "The event name will be 'Code Fusion'" → They provided the name "Code Fusion"
-    - "It's called the Global AI Summit" → They provided the name "Global AI Summit"
-    - "I'm thinking of 'DataBex : Data Science And AI'" → They provided the name "DataBex : Data Science And AI"
-    - "How about Quantum Leap?" → They provided the name "Quantum Leap"
-    - "Technohack" → They provided the name "Technohack"
-    - "techdeva" → They provided the name "techdeva"
-    - "technovate" → They provided the name "technovate"
-    - "the name is: innovation-2024" -> They provided the name "innovation-2024"
-
-    **Rules:**
-    - **Explicit Name Provision:** If the user has explicitly stated a name, extract it exactly as they have provided it, including any colons or additional descriptions.
-    - **Uncertainty Detection:** If the user expresses uncertainty (e.g., "I don't know", "not sure", "help me", "can you suggest", "any ideas?", "I need help with a name"), or asks a question about names, classify it as "NO_NAME_PROVIDED".
-    - **Contextual Understanding:** Even if the user doesn't use standard phrases, if the context clearly indicates they are providing a name, extract it.
-    - **Full Name Extraction:** Capture the entire name, including any additional parts after a colon (e.g., "DataBex : Data Science And AI").
-    - **Flexible Matching:** Recognize names even with slight variations in spelling or capitalization, if the intent is clear.
+    Examples:
+    - "I want to name it TechFest" â†’ They provided the name "TechFest"
+    - "Let's call it Innovate 2023" â†’ They provided the name "Innovate 2023"
+    - "I don't know what to name it" â†’ They are uncertain, need suggestions
+    - "Can you suggest some names?" â†’ They are uncertain, need suggestions
+    
+    Rules:
+    - If the user has CLEARLY mentioned a name, for example: "technohack","techdeva","technovate", extract  it exactly as they said.
+    - If there's any sign of uncertainty (e.g., "I don't know", "not sure", "help me", "can you suggest"), mark as NO_NAME_PROVIDED.
+    - If the user seems to be asking a question rather than stating a name, mark as NO_NAME_PROVIDED.
     
     Return **only a valid JSON** in this format:
     {{
         "has_name": true/false,
         "extracted_name": "Event Name" or "NO_NAME_PROVIDED"
     }}
+    Ensure that you capture the entire name, including any additional parts after a colon (e.g., "DataBex : Data Science And AI" should be captured as "DataBex : Data Science And AI").
     """
 
     response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Extract event name if given, otherwise indicate uncertainty.")])
@@ -1061,188 +975,188 @@ def is_requesting_more_suggestions(user_input: str, llm) -> bool:
 
 
 async def handle_name_suggestion(session_id: str, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle the name suggestion workflow with proper state management."""
     if session_id not in session_store:
         session_store[session_id] = {
             "name_conversation": {
                 "stage": "initial",
-                "is_name_finalized": False,
-                "llm_active": True,
                 "previous_suggestions": [],
-                "attempts": 0
+                "all_shown_names": set(),
+                "attempts": 0,
+                "theme_focus": None,
+                "name_style": None
             }
         }
 
     session_data = session_store[session_id]
     name_conv = session_data["name_conversation"]
 
-    if context["hackathon_details"].get("drillName"):
+    # Check if we need to gather theme information first
+    if name_conv["stage"] == "initial":
+        name_conv["stage"] = "theme_focus"
         return {
-            "message": f"Your event name is set to '{context['hackathon_details']['drillName']}'. When do you want to organize it?",
+            "message": "Let me help you with the name of your event. What's the main theme or focus of your event—AI, cybersecurity, software development, or something else?",
             "context": context,
-            "current_question": "phaseStartDt"
+            "current_question": "drillName",
+            "requires_selection": False
         }
 
+    if name_conv["stage"] == "theme_focus":
+        name_conv["theme_focus"] = user_input
+        name_conv["stage"] = "name_style"
+        return {
+            "message": "Ok, Should the name be short and catchy or descriptive and informative?",
+            "context": context,
+            "current_question": "drillName",
+            "requires_selection": False
+        }
+
+    if name_conv["stage"] == "name_style":
+        name_conv["name_style"] = user_input
+        name_conv["stage"] = "suggesting"
+
+    # Handle name selection if we have previous suggestions
     if name_conv["previous_suggestions"]:
-        prompt = f"""
-        The user was given these event name suggestions:
-        {', '.join(name_conv["previous_suggestions"])}
-
-        Now, the user responded with: "{user_input}"
-
-        Determine if they are expressing preference for one of the names. Examples:
-        - "I like Next Gen AI" â†’ selects "Next Gen AI"
-        - "Let's go with AI Thrive Workshop" â†’ selects "AI Thrive Workshop"
-        - "I prefer AI Launchpad" â†’ selects "AI Launchpad"
-        - "Give me more suggestions" â†’ NO selection, request new names
-        - "None of these work" â†’ NO selection, request new names
-
-        Return ONLY the name they selected (if any), otherwise return "NO_SELECTION".
-        """
-        response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Which name did the user choose?")])
-        selected_name = response.content.strip()
-
-        if selected_name != "NO_SELECTION":
+        index, selected_name = analyze_name_choice(user_input, name_conv["previous_suggestions"], llm)
+        
+        if selected_name:
             context["hackathon_details"]["drillName"] = selected_name
-            name_conv["is_name_finalized"] = True
-            name_conv["llm_active"] = False  # Stop LLM after name selection
-
             return {
-                "message": f"Great! {selected_name} is your event name. When do you want to organize it?",
+                "message": f"Great! Your event name is set to {selected_name}. When do you want to organize it?",
                 "context": context,
                 "current_question": "phaseStartDt"
             }
-
-    if is_requesting_more_suggestions(user_input, llm):
-        name_conv["attempts"] += 1
-        if name_conv["attempts"] > 2:
-            return {
-                "message": "I've already given multiple suggestions. Let me know which one you like!",
-                "context": context,
-                "current_question": "drillName"
-            }
-
-        prompt = f"""
-        The user wants more event name suggestions. Generate a fresh set of names that are **different** from:
-        {name_conv["previous_suggestions"]}.
         
-        Keep them **short, catchy, and relevant to** "{context.get('hackathon_details', {}).get('drillSubCategory', 'event')}".  
-        """
-        response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Generate different event name suggestions.")])
-        llm_output = response.content.strip()
+        if is_requesting_more_suggestions(user_input, llm):
+            name_conv["attempts"] += 1
+            if name_conv["attempts"] > 5:
+                return {
+                    "message": "I've provided several suggestions already. Please choose one of the previous options or start over.",
+                    "context": context,
+                    "current_question": "drillName",
+                    "suggestions": name_conv["previous_suggestions"],
+                    "requires_selection": True
+                }
 
-        name_conv["previous_suggestions"] = llm_output.split("\n")
-        return {
-            "message": f"Here are some new ideas:\n\n{llm_output}\n\nDo any of these work for you?",
-            "context": context,
-            "current_question": "drillName"
-        }
-
-    name_conv["llm_active"] = True
-
+    # Generate new suggestions based on all context
     prompt = f"""
-    The user needs help naming their event. Generate **5-7 catchy, relevant event names** based on the event details.
+    Generate 7 unique and creative event names based on:
+    Category: {context.get('hackathon_details', {}).get('drillSubCategory', 'event')}
+    Theme/Focus: {name_conv.get('theme_focus', 'general')}
+    Name Style: {name_conv.get('name_style', 'balanced')}
+    Previously shown names: {list(name_conv.get('all_shown_names', set()))}
 
-    **User input so far:** "{user_input}"
-
-    **Steps:**  
-    1. Extract **3-5 important keywords** from the user's description.  
-    2. Generate **5-7 short, catchy event names** using these keywords.  
-    3. Provide the names in a simple list format.  
-    4. End with the question: **"Do any of these work for you?"**  
+    Rules:
+    1. Each name must be unique and NOT in the previously shown names
+    2. If style is "short and catchy": Keep names 2-3 words
+    3. If style is "descriptive": Make names more detailed but still concise
+    4. Make names relevant to both category and theme
+    5. Format as a simple numbered list
+    6. Do not include the numbers in the actual names
+    7. Align with the theme: {name_conv.get('theme_focus')}
     """
 
-    response = llm.invoke([SystemMessage(content=prompt), HumanMessage(content="Generate event name suggestions.")])
-    llm_output = response.content.strip()
+    response = llm.invoke([
+        SystemMessage(content=prompt),
+        HumanMessage(content="Generate fresh event name suggestions")
+    ])
+    
+    new_suggestions = [
+        name.strip().split('.', 1)[-1].strip() 
+        for name in response.content.strip().split('\n')
+        if name.strip() and name.strip().split('.', 1)[-1].strip() not in name_conv.get('all_shown_names', set())
+    ]
 
-    name_conv["previous_suggestions"] = llm_output.split("\n")
+    name_conv['previous_suggestions'] = new_suggestions
+    name_conv['all_shown_names'].update(new_suggestions)
 
     return {
-        "message": llm_output,
+        "message": "\n".join([f"{i+1}. {name}" for i, name in enumerate(new_suggestions)]) + "\n\nDo any of these work for you?",
         "context": context,
-        "current_question": "drillName"
+        "current_question": "drillName",
+        "suggestions": new_suggestions,
+        "requires_selection": True
     }
 
 def analyze_name_choice(message: str, suggested_names: List[str], llm) -> Tuple[int, str]:
+    """
+    Analyze user's message to determine which suggested name they selected.
+    Handles exact matches, partial matches, numbering, and preference expressions.
+    """
     if not suggested_names:
         return None, None
 
-    message_lower = message.lower()
-
+    message_lower = message.lower().strip()
+    
+    # 1. Check for numeric selection patterns
     for i in range(1, len(suggested_names) + 1):
         number_patterns = [
-            f"^{i}$",
-            f"^{i}[.)]",
-            f"option {i}",
-            f"number {i}",
-            f"{i}st" if i == 1 else f"{i}nd" if i == 2 else f"{i}rd" if i == 3 else f"{i}th"
+            f"^{i}$", f"^{i}[.)]", f"option {i}", 
+            f"number {i}", f"choice {i}", f"{i}(?:st|nd|rd|th)"
         ]
-        for pattern in number_patterns:
-            if re.search(pattern, message_lower, re.IGNORECASE):
-                return i - 1, suggested_names[i - 1]
+        if any(re.search(pattern, message_lower) for pattern in number_patterns):
+            return i - 1, suggested_names[i - 1]
 
-    ordinal_mappings = {
-        "first": 0,
-        "second": 1,
-        "third": 2,
-        "fourth": 3,
-        "fifth": 4,
-        "last": len(suggested_names) - 1
-    }
-    for word, index in ordinal_mappings.items():
-        if word in message_lower:
-            return index, suggested_names[index]
-
+    # 2. Direct exact matches
     for i, name in enumerate(suggested_names):
-        if name.lower() in message_lower:
+        name_lower = name.lower()
+        if message_lower == name_lower:
             return i, name
 
-    preference_keywords = ["i like", "i prefer", "let's go with", "choose", "select"]
-    for keyword in preference_keywords:
-        if keyword in message_lower:
-            for i, name in enumerate(suggested_names):
-                if name.lower() in message_lower:
-                    return i, name
-
+    # 3. Use LLM to analyze ambiguous responses
     prompt = f"""
-    Determine which event name the user is selecting from the list of suggestions.
-    
-    User message: "{message}"
-    
-    Available suggestions:
+    The user was shown these event name options:
     {', '.join([f"{i+1}. {name}" for i, name in enumerate(suggested_names)])}
-    
-    Rules:
-    - If the user mentions a number or position (like "first one", "number 3", "the last one", etc.), select that numbered option
-    - If the user mentions a name or part of a name, select the full name that contains it
-    - If the user expresses preference ("I like", "I prefer", "let's go with", etc.) for a specific option, select it
-    - Look for partial name matches, even if the user only mentions distinctive words from the name
-    
-    Respond with ONLY the number and name in the format "NUMBER:NAME", or "NONE" if no selection can be determined.
-    For example: "1:Tech Summit 2025" or "NONE"
+
+    The user responded with: "{message}"
+
+    Task:
+    1. Analyze which name they're most likely referring to
+    2. Consider partial matches, keywords, and context
+    3. Consider phrases like "the one with [keyword]" or "the [keyword] one"
+    4. Look for semantic similarity and intent
+    5. Return ONLY the number and exact name if confident, format: "number:exact_name"
+    6. If unclear, return "NONE"
+
+    Example outputs:
+    "3:ML Innovate: A Hackathon Focused on Machine Learning Solutions"
+    "NONE"
     """
+
     try:
         response = llm.invoke([
             SystemMessage(content=prompt),
-            HumanMessage(content="Which suggestion did the user select?")
+            HumanMessage(content="Which name did they select?")
         ])
         result = response.content.strip()
+        
+        if result != "NONE":
+            try:
+                index_str, selected_name = result.split(":", 1)
+                index = int(index_str) - 1
+                selected_name = selected_name.strip()
+                
+                # Verify the selection matches our list
+                if 0 <= index < len(suggested_names) and selected_name == suggested_names[index]:
+                    return index, selected_name
+            except (ValueError, IndexError):
+                pass
 
-        if "NONE" in result:
-            return None, None
-
-        match = re.match(r"(\d+):(.*)", result)
-        if match:
-            index = int(match.group(1)) - 1
-            name = match.group(2).strip()
-            for i, suggested in enumerate(suggested_names):
-                if suggested.lower() == name.lower() or (index == i and name in suggested):
-                    return i, suggested_names[i]
-
+        # If LLM couldn't identify a clear match, try keyword matching as fallback
+        keywords = set(message_lower.split())
         for i, name in enumerate(suggested_names):
-            if name.lower() in result.lower():
+            name_lower = name.lower()
+            # Check for significant keyword matches
+            matching_words = set(name_lower.split()).intersection(keywords)
+            if matching_words and any(len(word) > 3 for word in matching_words):
                 return i, name
+            
+            # Check for characteristic phrases in name
+            for word in keywords:
+                if len(word) > 3 and word in name_lower:
+                    return i, name
 
     except Exception as e:
-        print(f"Error in analyze_name_choice: {str(e)}")
+        print(f"LLM analysis error: {str(e)}")
 
     return None, None
